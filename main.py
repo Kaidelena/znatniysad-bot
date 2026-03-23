@@ -1,4 +1,6 @@
 import os
+import json
+import sys
 import requests
 from flask import Flask, request, jsonify
 import google.generativeai as genai
@@ -33,98 +35,6 @@ E-mail: info@z-sad.ru
 
 Награды: лауреат конкурса «Народное признание» 2021 (ВДНХ, выставка «Дача. Сад. Малая механизация»).
 
-import os
-import json
-import sys
-import requests
-from flask import Flask, request, jsonify
-import google.generativeai as genai
-
-app = Flask(__name__)
-
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
-MAX_BOT_TOKEN  = os.environ.get('MAX_BOT_TOKEN', '')
-MAX_API_BASE   = "https://botapi.max.ru"
-
-genai.configure(api_key=GEMINI_API_KEY)
-
-SYSTEM_PROMPT = """
-Ты — вежливый и профессиональный ИИ-консультант интернет-магазина Знатный Сад.
-Отвечай только на русском языке. Будь дружелюбным, конкретным и полезным.
-Если клиент просит прайс — скажи что можешь назвать цену на конкретный товар прямо здесь.
-Если вопрос вне твоей компетенции — предложи связаться с менеджером: +7 985 898-33-67.
-Сайт: https://znatniysad.ru  Телефон: +7 985 898-33-67 (пн–пт, 10:00–18:00).
-"""
-
-model = genai.GenerativeModel(
-    model_name='gemini-1.5-flash',
-    system_instruction=SYSTEM_PROMPT
-)
-
-chat_sessions = {}
-
-
-def log(msg):
-    print(msg, flush=True)
-    sys.stdout.flush()
-
-
-def send_max_message(chat_id: str, text: str):
-    url = f"{MAX_API_BASE}/messages"
-    headers = {'Authorization': f'Bearer {MAX_BOT_TOKEN}', 'Content-Type': 'application/json'}
-    try:
-        r = requests.post(url, headers=headers, params={'chat_id': chat_id}, json={'text': text}, timeout=10)
-        log(f"MAX API chat_id={chat_id}: {r.status_code} {r.text[:200]}")
-        if r.status_code not in (200, 201):
-            r2 = requests.post(url, headers=headers, params={'user_id': chat_id}, json={'text': text}, timeout=10)
-            log(f"MAX API user_id={chat_id}: {r2.status_code} {r2.text[:200]}")
-    except Exception as e:
-        log(f"SEND ERROR: {e}")
-
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    data = request.get_json(silent=True)
-    log(f"=== WEBHOOK raw={json.dumps(data, ensure_ascii=False)[:600]}")
-    if not data:
-        return jsonify({'ok': True})
-    updates = data if isinstance(data, list) else data.get('updates', [data])
-    for update in updates:
-        etype = update.get('update_type') or update.get('type', '')
-        log(f"event={etype}")
-        if etype == 'message_created':
-            msg  = update.get('message', {})
-            body = msg.get('body', {})
-            text = body.get('text', '').strip()
-            sndr = msg.get('sender', {})
-            rcpt = msg.get('recipient', {})
-            chat_id = rcpt.get('chat_id') or rcpt.get('chatId') or sndr.get('user_id') or sndr.get('userId') or ''
-            user_id = str(sndr.get('user_id') or sndr.get('userId') or chat_id)
-            log(f"text={text!r} chat_id={chat_id!r} user_id={user_id!r}")
-            if not text or not chat_id:
-                log("SKIP empty")
-                continue
-            if user_id not in chat_sessions:
-                chat_sessions[user_id] = model.start_chat(history=[])
-            try:
-                log(f"Gemini << {text[:60]}")
-                reply = chat_sessions[user_id].send_message(text).text
-                log(f"Gemini >> {reply[:80]}")
-            except Exception as e:
-                log(f"GEMINI ERROR: {e}")
-                reply = "Извините, ошибка. Позвоните: +7 985 898-33-67 (пн–пт 10:00–18:00)."
-            send_max_message(str(chat_id), reply)
-    return jsonify({'ok': True})
-
-
-@app.route('/', methods=['GET'])
-def health():
-    return 'OK Znatniysad bot running'
-
-
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
 ═══════════════════════════════════════════════
 АССОРТИМЕНТ (категории)
 ═══════════════════════════════════════════════
@@ -306,57 +216,92 @@ model = genai.GenerativeModel(
 chat_sessions = {}
 
 
-def send_max_message(user_id: str, text: str):
+def log(msg):
+    """Вывод с немедленным сбросом буфера — нужно для логов Render.com."""
+    print(msg, flush=True)
+    sys.stdout.flush()
+
+
+def send_max_message(chat_id: str, text: str):
     """Отправить сообщение пользователю через MAX Bot API."""
     url = f"{MAX_API_BASE}/messages"
     headers = {
-        'Authorization': MAX_BOT_TOKEN,
+        'Authorization': f'Bearer {MAX_BOT_TOKEN}',
         'Content-Type': 'application/json'
     }
-    params = {'user_id': user_id}
+    params = {'chat_id': chat_id}
     payload = {'text': text}
     try:
         resp = requests.post(url, headers=headers, params=params, json=payload, timeout=10)
-        print(f"MAX API ответ: {resp.status_code} {resp.text[:200]}")
+        log(f"MAX API (chat_id) ответ: {resp.status_code} {resp.text[:300]}")
+        if resp.status_code != 200:
+            params2 = {'user_id': chat_id}
+            resp2 = requests.post(url, headers=headers, params=params2, json=payload, timeout=10)
+            log(f"MAX API (user_id) ответ: {resp2.status_code} {resp2.text[:300]}")
         return resp.json()
     except Exception as e:
-        print(f"Ошибка отправки сообщения MAX: {e}")
+        log(f"Ошибка отправки сообщения MAX: {e}")
         return {}
 
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.get_json(silent=True)
+    log("=== WEBHOOK ПОЛУЧЕН ===")
+    log(f"RAW DATA: {json.dumps(data, ensure_ascii=False)[:1000]}")
+
     if not data:
+        log("Пустые данные — пропускаем")
         return jsonify({'ok': True})
 
     # MAX присылает либо список updates, либо одиночный update
     updates = data if isinstance(data, list) else data.get('updates', [data])
+    log(f"Количество updates: {len(updates)}")
 
-    for update in updates:
-        event_type = update.get('type', '')
+    for i, update in enumerate(updates):
+        event_type = update.get('update_type') or update.get('type', '')
+        log(f"--- Update #{i}: type={event_type} ---")
+        log(f"Update содержимое: {json.dumps(update, ensure_ascii=False)[:500]}")
 
         if event_type == 'message_created':
-            message  = update.get('message', {})
-            body     = message.get('body', {})
-            text     = body.get('text', '').strip()
-            sender   = message.get('sender', {})
-            chat     = update.get('chat', {})
-            chat_id  = chat.get('chatId') or sender.get('userId', '')
-            user_id  = str(sender.get('userId', chat_id))
+            message   = update.get('message', {})
+            body      = message.get('body', {})
+            text      = body.get('text', '').strip()
+            sender    = message.get('sender', {})
+            recipient = message.get('recipient', {})
+
+            # Определяем chat_id для ответа
+            chat_id = (
+                recipient.get('chat_id') or
+                recipient.get('chatId') or
+                sender.get('user_id') or
+                sender.get('userId') or
+                ''
+            )
+            user_id = str(
+                sender.get('user_id') or
+                sender.get('userId') or
+                chat_id
+            )
+
+            log(f"text='{text}', chat_id='{chat_id}', user_id='{user_id}'")
 
             if not text or not chat_id:
+                log(f"Пропускаем: text='{text}', chat_id='{chat_id}'")
                 continue
 
             # Получаем или создаём сессию для пользователя
             if user_id not in chat_sessions:
                 chat_sessions[user_id] = model.start_chat(history=[])
+                log(f"Создана новая Gemini-сессия для user_id={user_id}")
 
             try:
+                log(f"Отправляем в Gemini: '{text}'")
                 response = chat_sessions[user_id].send_message(text)
                 reply = response.text
+                log(f"Gemini ответил: '{reply[:100]}...'")
             except Exception as e:
-                print(f"Ошибка Gemini: {e}")
+                log(f"Ошибка Gemini: {e}")
                 reply = (
                     "Извините, что-то пошло не так. "
                     "Пожалуйста, позвоните нам: +7 985 898-33-67 "
