@@ -214,13 +214,18 @@ model = genai.GenerativeModel(
 chat_sessions = {}
 
 
-def send_max_message(chat_id: str, text: str):
+def send_max_message(user_id: str, text: str):
     """Отправить сообщение пользователю через MAX Bot API."""
-    url = f"{MAX_API_BASE}/messages/sendText"
-    params = {'token': MAX_BOT_TOKEN}
-    payload = {'chatId': chat_id, 'text': text}
+    url = f"{MAX_API_BASE}/messages"
+    headers = {
+        'Authorization': MAX_BOT_TOKEN,
+        'Content-Type': 'application/json'
+    }
+    params = {'user_id': user_id}
+    payload = {'text': text}
     try:
-        resp = requests.post(url, params=params, json=payload, timeout=10)
+        resp = requests.post(url, headers=headers, params=params, json=payload, timeout=10)
+        print(f"MAX API ответ: {resp.status_code} {resp.text[:200]}")
         return resp.json()
     except Exception as e:
         print(f"Ошибка отправки сообщения MAX: {e}")
