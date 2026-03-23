@@ -33,6 +33,98 @@ E-mail: info@z-sad.ru
 
 Награды: лауреат конкурса «Народное признание» 2021 (ВДНХ, выставка «Дача. Сад. Малая механизация»).
 
+import os
+import json
+import sys
+import requests
+from flask import Flask, request, jsonify
+import google.generativeai as genai
+
+app = Flask(__name__)
+
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
+MAX_BOT_TOKEN  = os.environ.get('MAX_BOT_TOKEN', '')
+MAX_API_BASE   = "https://botapi.max.ru"
+
+genai.configure(api_key=GEMINI_API_KEY)
+
+SYSTEM_PROMPT = """
+Ты — вежливый и профессиональный ИИ-консультант интернет-магазина Знатный Сад.
+Отвечай только на русском языке. Будь дружелюбным, конкретным и полезным.
+Если клиент просит прайс — скажи что можешь назвать цену на конкретный товар прямо здесь.
+Если вопрос вне твоей компетенции — предложи связаться с менеджером: +7 985 898-33-67.
+Сайт: https://znatniysad.ru  Телефон: +7 985 898-33-67 (пн–пт, 10:00–18:00).
+"""
+
+model = genai.GenerativeModel(
+    model_name='gemini-1.5-flash',
+    system_instruction=SYSTEM_PROMPT
+)
+
+chat_sessions = {}
+
+
+def log(msg):
+    print(msg, flush=True)
+    sys.stdout.flush()
+
+
+def send_max_message(chat_id: str, text: str):
+    url = f"{MAX_API_BASE}/messages"
+    headers = {'Authorization': f'Bearer {MAX_BOT_TOKEN}', 'Content-Type': 'application/json'}
+    try:
+        r = requests.post(url, headers=headers, params={'chat_id': chat_id}, json={'text': text}, timeout=10)
+        log(f"MAX API chat_id={chat_id}: {r.status_code} {r.text[:200]}")
+        if r.status_code not in (200, 201):
+            r2 = requests.post(url, headers=headers, params={'user_id': chat_id}, json={'text': text}, timeout=10)
+            log(f"MAX API user_id={chat_id}: {r2.status_code} {r2.text[:200]}")
+    except Exception as e:
+        log(f"SEND ERROR: {e}")
+
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    data = request.get_json(silent=True)
+    log(f"=== WEBHOOK raw={json.dumps(data, ensure_ascii=False)[:600]}")
+    if not data:
+        return jsonify({'ok': True})
+    updates = data if isinstance(data, list) else data.get('updates', [data])
+    for update in updates:
+        etype = update.get('update_type') or update.get('type', '')
+        log(f"event={etype}")
+        if etype == 'message_created':
+            msg  = update.get('message', {})
+            body = msg.get('body', {})
+            text = body.get('text', '').strip()
+            sndr = msg.get('sender', {})
+            rcpt = msg.get('recipient', {})
+            chat_id = rcpt.get('chat_id') or rcpt.get('chatId') or sndr.get('user_id') or sndr.get('userId') or ''
+            user_id = str(sndr.get('user_id') or sndr.get('userId') or chat_id)
+            log(f"text={text!r} chat_id={chat_id!r} user_id={user_id!r}")
+            if not text or not chat_id:
+                log("SKIP empty")
+                continue
+            if user_id not in chat_sessions:
+                chat_sessions[user_id] = model.start_chat(history=[])
+            try:
+                log(f"Gemini << {text[:60]}")
+                reply = chat_sessions[user_id].send_message(text).text
+                log(f"Gemini >> {reply[:80]}")
+            except Exception as e:
+                log(f"GEMINI ERROR: {e}")
+                reply = "Извините, ошибка. Позвоните: +7 985 898-33-67 (пн–пт 10:00–18:00)."
+            send_max_message(str(chat_id), reply)
+    return jsonify({'ok': True})
+
+
+@app.route('/', methods=['GET'])
+def health():
+    return 'OK Znatniysad bot running'
+
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
 ═══════════════════════════════════════════════
 АССОРТИМЕНТ (категории)
 ═══════════════════════════════════════════════
