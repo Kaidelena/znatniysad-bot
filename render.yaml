@@ -1,1 +1,11 @@
-
+services:
+  - type: web
+    name: znatniysad-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn main:app
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: MAX_BOT_TOKEN
+        sync: false
