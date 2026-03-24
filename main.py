@@ -226,10 +226,12 @@ def send_max_message(chat_id: str, text: str):
     """Отправить сообщение пользователю через MAX Bot API."""
     url = f"{MAX_API_BASE}/messages"
     headers = {
-        'Authorization': f'Bearer {MAX_BOT_TOKEN}',
         'Content-Type': 'application/json'
     }
-    params = {'chat_id': chat_id}
+    params = {
+        'access_token': MAX_BOT_TOKEN,
+        'chat_id': chat_id
+    }
     payload = {'text': text}
     try:
         resp = requests.post(url, headers=headers, params=params, json=payload, timeout=10)
